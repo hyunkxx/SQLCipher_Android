@@ -1,0 +1,178 @@
+apply plugin: 'com.android.library'
+apply plugin: "maven-publish"
+apply plugin: "signing"
+
+android {
+    compileSdkVersion 33
+
+    defaultConfig {
+        minSdkVersion "${rootProject.ext.minSdkVersion}"
+        targetSdkVersion 33
+        versionCode 1
+        versionName "${rootProject.ext.libraryVersion}"
+        project.archivesBaseName = "sqlcipher-android-${versionName}"
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        consumerProguardFile 'consumer-rules.pro'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
+            debuggable true
+            jniDebuggable true
+            ndk {
+                // Building with NDK_DEBUG=1 for mips crashes the compiler in ndk 14.
+                abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+            }
+        }
+    }
+
+    //sourceSets.main.jni.srcDirs = [] //disable automatic ndk-build call
+    externalNativeBuild {
+        ndkBuild {
+            path 'src/main/jni/Android.mk'
+        }
+    }
+
+    ndkVersion "${rootProject.ext.androidNdkVersion}"
+
+    useLibrary 'android.test.base' // for android.test.AndroidTestCase
+    useLibrary 'android.test.runner' // for android.test.MoreAsserts
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+
+    // Needed for the Support API interfaces
+    implementation "androidx.sqlite:sqlite:${rootProject.ext.androidXSQLiteVersion}"
+
+    // Needed for the Support API in tests
+    androidTestImplementation "androidx.room:room-common:${rootProject.ext.roomVersion}"
+    androidTestImplementation "androidx.room:room-runtime:${rootProject.ext.roomVersion}"
+    androidTestAnnotationProcessor "androidx.room:room-compiler:${rootProject.ext.roomVersion}"
+
+    // Needed for supporting tests
+    androidTestImplementation 'androidx.test.ext:junit:1.1.3'
+    androidTestImplementation 'androidx.test:rules:1.4.0'
+    androidTestImplementation 'androidx.test:core:1.4.0'
+    androidTestImplementation 'org.hamcrest:hamcrest-library:1.3'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+allprojects {
+    repositories {
+        // The order in which you list these repositories matter.
+        google()
+        jcenter()
+    }
+}
+
+def isReleaseBuild() {
+    return mavenVersionName.contains("SNAPSHOT") == false
+}
+
+def getReleaseRepositoryUrl() {
+    return hasProperty('mavenReleaseRepositoryUrl') ? mavenReleaseRepositoryUrl
+            : "https://oss.sonatype.org/service/local/staging/deploy/maven2/"
+}
+
+def getSnapshotRepositoryUrl() {
+    if(hasProperty('mavenLocalRepositoryPrefix')) {
+        return "${mavenLocalRepositoryPrefix}${buildDir}/${mavenSnapshotRepositoryUrl}"
+    } else {
+        return hasProperty('mavenSnapshotRepositoryUrl') ? mavenSnapshotRepositoryUrl
+                : "https://oss.sonatype.org/content/repositories/snapshots/"
+    }
+}
+
+def getRepositoryUsername() {
+    return hasProperty('nexusUsername') ? nexusUsername : ""
+}
+
+def getRepositoryPassword() {
+    return hasProperty('nexusPassword') ? nexusPassword : ""
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    if (taskGraph.allTasks.any { it instanceof Sign }) {
+        allprojects { ext."signing.keyId" = "${signingKeyId}" }
+        allprojects { ext."signing.secretKeyRingFile" = "${signingKeyRingFile}" }
+        allprojects { ext."signing.password" = "${signingKeyPassword}" }
+    }
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                groupId = "net.zetetic"
+                artifactId = "sqlcipher-android"
+                version = "${rootProject.ext.mavenVersionName}"
+                from components.release
+                artifact androidSourcesJar
+                pom {
+                    name = "sqlcipher-android"
+                    packaging = "aar"
+                    description = "SQLCipher for Android a library that provides full database encryption."
+                    url = "https://www.zetetic.net/sqlcipher"
+                    scm {
+                        url = "https://github.com/sqlcipher/sqlcipher-android.git"
+                        connection = "scm:git:https://github.com/sqlcipher/sqlcipher-android.git"
+                        developerConnection = "scm:git:https://github.com/sqlcipher/sqlcipher-android.git"
+                    }
+                    licenses {
+                        license {
+                            url = "https://www.zetetic.net/sqlcipher/license/"
+                        }
+                    }
+                    developers {
+                        developer {
+                            name = "Zetetic Support"
+                            email = "support@zetetic.net"
+                            organization = "Zetetic LLC"
+                            organizationUrl = "https://www.zetetic.net"
+                        }
+                    }
+                }
+            }
+        }
+
+        repositories {
+            maven {
+                def repoUrl = isReleaseBuild()
+                        ? getReleaseRepositoryUrl()
+                        : getSnapshotRepositoryUrl()
+                url = repoUrl
+                credentials {
+                    username = getRepositoryUsername()
+                    password = getRepositoryPassword()
+                }
+            }
+        }
+
+    }
+
+    signing {
+        required { isReleaseBuild() && gradle.taskGraph.hasTask("publish") }
+        sign publishing.publications.mavenJava
+    }
+
+    artifacts {
+        archives androidSourcesJar
+    }
+}
+
+task androidSourcesJar(type: Jar) {
+    archiveClassifier.set('sources')
+    from android.sourceSets.main.java.srcDirs
+}
